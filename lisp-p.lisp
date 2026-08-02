@@ -44,7 +44,9 @@ in-progress token without themselves needing to be consed onto it.")
   (member c *terminating-chars* :test #'char=))
 
 (defun lisp-p (stream)
-  "Return T if STREAM contains a putative Lisp program, NIL otherwise.
+  "Return T if STREAM (or STRING) contains a putative Lisp program, NIL
+otherwise.  If STREAM is a string, it is converted to a stream via
+WITH-INPUT-FROM-STRING and LISP-P is called recursively on that stream.
 
 This drives a state machine modeled on the Common Lisp reader algorithm
 (CLHS 2.2) one character at a time, without consing or interning: state is
@@ -55,6 +57,11 @@ yet applied to a datum) plus three fixed-size, dynamic-extent (stack
 allocated, not heap-consed) per-depth arrays -- BQ-LEVEL, HAS-DATUM, and
 DOT-STATE -- rather than any heap-allocated representation of the parsed
 forms.
+
+If STREAM is a STRING, this function does not itself avoid consing (the
+string must already exist in memory, and WITH-INPUT-FROM-STRING allocates a
+string-stream wrapper), but the recursive call that scans it obeys the
+no-consing/no-interning constraints described below.
 
 Two additional reader-level rules are enforced beyond simple delimiter
 balancing:
@@ -87,6 +94,10 @@ characters like #b, #s, or #+ are followed by well-formed content, or
 that numeric tokens are well-formed) -- only that reader-level delimiters
 are balanced and bounded, and that backquote/comma and consing-dot usage
 are locally consistent, per the project's design notes."
+  (when (stringp stream)
+    (return-from lisp-p
+      (with-input-from-string (s stream)
+        (lisp-p s))))
   (let ((state :normal)
         (list-depth 0)
         (comment-depth 0)
