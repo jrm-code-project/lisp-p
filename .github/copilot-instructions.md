@@ -68,11 +68,58 @@ without consing:
   named characters like `#\Newline` are multi-character but still just a
   token boundary problem, not a semantic one.
 
-Only two independent nesting counters are required: one for list depth and
+Only two independent nesting *counters* are required: one for list depth and
 one for block-comment depth. Everything else (string, multiple-escape,
 single-escape, line comment, token, dispatch) is a simple on/off flag or a
 one-shot lookahead, because CL only has one list-closing delimiter and only
 block comments support nesting.
+
+### Backquote / comma tracking
+
+A comma is only valid where some enclosing backquote's quotation is still
+"in effect". This is tracked with:
+
+- `bq-pending` — a single integer counting backquote/comma prefix
+  characters (`` ` `` increments, `,` decrements) that have been seen but
+  not yet applied to a datum. It resets to zero whenever the datum it
+  applies to is fully read (a token, string, char literal, or list
+  completes) or is folded into a new list frame's level when `(` is seen.
+- `bq-level` — a fixed-size, dynamic-extent (stack-allocated) array indexed
+  by list depth, recording the net backquote level in effect for each
+  currently-open list. When `(` opens a new frame, its level is the
+  parent's level plus the current `bq-pending`. A `,` is only legal when
+  `(+ bq-level[depth] bq-pending)` is positive; a `` ` `` is unconditionally
+  legal but bounded by `+max-backquote-depth+`.
+
+A `,` (optionally followed by `@` for `,@`) that is not "inside" a
+backquote — i.e. where that sum would not be positive — is rejected.
+
+### Consing-dot tracking
+
+A lone `.` token is only accepted as a literal dotted-cons separator, never
+as an ordinary symbol. This requires knowing, per list-nesting depth,
+whether a datum has already been read in the current list, and whether a
+dot has already been used there. Two more fixed-size, dynamic-extent arrays
+indexed by list depth track this:
+
+- `has-datum` — whether at least one datum has been read in the list at
+  this depth yet (a dot cannot be the first thing in a list).
+- `dot-state` — one of `:none`, `:dot-seen` (a dot was just read, exactly
+  one more datum must follow), or `:after-dot` (that one datum has been
+  read; nothing but the closing `)` may follow).
+
+A `.` token is only accepted (transitioning `:none` -> `:dot-seen`) when
+`list-depth` is positive, a prior datum exists at that depth, and no
+backquote/comma prefix (`bq-pending`) is currently pending. Reading any
+further datum when already `:after-dot`, or closing a list while still
+`:dot-seen` (no datum followed the dot), is rejected. This catches
+`(. a)`, `(a . )`, `(a . b c)`, and top-level `.` while still accepting
+`(a . b)` and `(a b . c)`.
+
+These five pieces of state (two counters, three fixed-size arrays sized by
+`+max-list-depth+`) are declared `dynamic-extent` so SBCL can stack-allocate
+them instead of heap-consing, preserving the no-consing constraint even
+though they are proper arrays rather than single integers.
 
 ### Length limits
 
